@@ -217,28 +217,20 @@ export default class TimelinePlugin extends Plugin {
         const fmRegex = /^---\n([\s\S]*?)\n---/;
         const match = content.match(fmRegex);
         if (match && match[1]) {
+			//console.log(`matched frontmatter: ${match[1]}`)
             return this.parseYAML(match[1]);
         }
         return {};
     }
 
-    parseYAML(yaml: string): Record<string, any> {
-        const lines = yaml.split('\n');
-        const data: Record<string, any> = {};
-        lines.forEach(line => {
-            const [key, ...rest] = line.split(':');
-            if (key && rest) {
-                // Handle array notation and single values
-                const value = rest.join(':').trim();
-                if (value.startsWith('[') && value.endsWith(']')) {
-                    data[key.trim()] = value.slice(1, -1).split(',').map(tag => tag.trim());
-                } else {
-                    data[key.trim()] = value;
-                }
-            }
-        });
-        return data;
-    }
+    parseYAML(yamlContent: string): Record<string, any> {
+		try {
+			return yaml.load(yamlContent) as Record<string, any>;
+		} catch (e) {
+			console.error("Failed to parse YAML:", e);
+			return {};
+		}
+	}
 
     extractSnippet(content: string, maxLength: number = 100): string {
         // Remove frontmatter
