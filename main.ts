@@ -11,8 +11,8 @@ interface TimelinePluginSettings {
 
 const DEFAULT_SETTINGS: TimelinePluginSettings = {
     tag: "#timeline",
-    dateProperty: "date",
-    searchIn: 'frontmatter',
+    dateProperty: "creation_date",
+    searchIn: 'both',
 }
 
 export default class TimelinePlugin extends Plugin {
@@ -68,42 +68,52 @@ export default class TimelinePlugin extends Plugin {
         }
         `;
         document.head.appendChild(style);
+        console.log('Styles added to the document');
 
-		// Add settings tab
-		this.addSettingTab(new TimelineSettingTab(this.app, this));
+        // Add settings tab
+        this.addSettingTab(new TimelineSettingTab(this.app, this));
+        console.log('Settings tab added');
 
-		// Add a command to render the timeline
-		this.addCommand({
-			id: 'render-timeline',
-			name: 'Render Document Timeline',
-			callback: () => this.renderTimeline(),
-		});
+        // Add a command to render the timeline
+        this.addCommand({
+            id: 'render-timeline',
+            name: 'Render Document Timeline',
+            callback: () => this.renderTimeline(),
+        });
+        console.log('Render timeline command added');
     }
 
     onunload() {
-        console.log('Unloading Timeline Plugin');
+        console.log('Unloading Document Timeline Plugin');
     }
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        console.log('Settings loaded:', this.settings);
     }
 
     async saveSettings() {
         await this.saveData(this.settings);
+        console.log('Settings saved:', this.settings);
     }
 
     async renderTimeline() {
+        console.log('Render timeline command triggered');
+
         // Get all markdown files
         const allFiles = this.app.vault.getMarkdownFiles();
+        console.log(`Total markdown files found: ${allFiles.length}`);
 
         // Normalize the tag (remove '#' if present)
         const normalizedTag = this.settings.tag.startsWith('#') ? this.settings.tag.slice(1) : this.settings.tag;
+        console.log(`Normalized tag: ${normalizedTag}`);
 
         // Filter files based on the specified tag
-        const files = [];
+        const files: TFile[] = [];
         for (const file of allFiles) {
             const content = await this.app.vault.read(file);
             const frontmatter = this.extractFrontmatter(content);
+            console.log(`Processing file: ${file.path}`);
 
             let hasTag = false;
 
@@ -112,8 +122,11 @@ export default class TimelinePlugin extends Plugin {
                 if (frontmatter.tags) {
                     if (Array.isArray(frontmatter.tags)) {
                         hasTag = frontmatter.tags.includes(normalizedTag);
+                        console.log(`Found tag in frontmatter (array): ${hasTag}`);
                     } else if (typeof frontmatter.tags === 'string') {
-                        hasTag = frontmatter.tags.split(',').map(tag => tag.trim()).includes(normalizedTag);
+                        const tagsArray = frontmatter.tags.split(',').map(tag => tag.trim());
+                        hasTag = tagsArray.includes(normalizedTag);
+                        console.log(`Found tag in frontmatter (string): ${hasTag}`);
                     }
                 }
             }
@@ -121,11 +134,21 @@ export default class TimelinePlugin extends Plugin {
             // If not found in frontmatter, check inline tags
             if (!hasTag && (this.settings.searchIn === 'inline' || this.settings.searchIn === 'both')) {
                 hasTag = content.includes(this.settings.tag);
+                console.log(`Found tag inline: ${hasTag}`);
             }
 
             if (hasTag) {
                 files.push(file);
+                console.log(`File added to timeline: ${file.path}`);
             }
+        }
+
+        console.log(`Total files matching tag: ${files.length}`);
+
+        if (files.length === 0) {
+            new Notice("No files found with the specified tag.");
+            console.log("No files matched the tag.");
+            return;
         }
 
         // Proceed with processing the filtered files
@@ -136,17 +159,21 @@ export default class TimelinePlugin extends Plugin {
             let date: Date;
             if (frontmatter[this.settings.dateProperty]) {
                 date = new Date(frontmatter[this.settings.dateProperty]);
+                console.log(`Extracted date from frontmatter for ${file.path}: ${date}`);
             } else {
                 // Fallback to file's creation date
                 const stats = await this.app.vault.adapter.stat(file.path);
                 if (stats?.ctime) {
                     date = new Date(stats.ctime);
+                    console.log(`Extracted creation date for ${file.path}: ${date}`);
                 } else {
                     date = new Date(); // Default to current date if none found
+                    console.log(`Default date for ${file.path}: ${date}`);
                 }
             }
             // Extract a snippet from the content
             const snippet = this.extractSnippet(content);
+            console.log(`Extracted snippet for ${file.path}: ${snippet}`);
             return {
                 file,
                 date,
@@ -156,6 +183,7 @@ export default class TimelinePlugin extends Plugin {
 
         // Sort files by date
         fileData.sort((a, b) => a.date.getTime() - b.date.getTime());
+        console.log("Files sorted by date");
 
         // Create HTML content for the timeline
         let html = `<div class="timeline-container">`;
@@ -171,6 +199,7 @@ export default class TimelinePlugin extends Plugin {
             `;
         });
         html += `</div>`;
+        console.log("HTML content for timeline generated");
 
         // Get the most recent leaf or create a new one
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -180,6 +209,7 @@ export default class TimelinePlugin extends Plugin {
             console.log("Timeline rendered in the current view");
         } else {
             new Notice("Unable to open a pane for the timeline.");
+            console.log("No active leaf found to render the timeline.");
         }
     }
 
@@ -215,8 +245,9 @@ export default class TimelinePlugin extends Plugin {
         const fmRegex = /^---\n([\s\S]*?)\n---\n/;
         content = content.replace(fmRegex, '');
         // Extract the first few lines or up to maxLength
-        const snippet = content.split('\n').find(line => line.trim().length > 0) || '';
-        return snippet.substring(0, maxLength) + (snippet.length > maxLength ? '...' : '');
+        const lines = content.split('\n').filter(line => line.trim().length > 0);
+        const snippet = lines.slice(0, 2).join(' '); // Get first two non-empty lines
+        return snippet.length > maxLength ? snippet.substring(0, maxLength) + '...' : snippet;
     }
 
     calculatePosition(date: Date): number {
@@ -248,7 +279,7 @@ class TimelineSettingTab extends PluginSettingTab {
         const { containerEl } = this;
 
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'Timeline Settings' });
+        containerEl.createEl('h2', { text: 'Document Timeline Settings' });
 
         new Setting(containerEl)
             .setName('Tag to Filter')
