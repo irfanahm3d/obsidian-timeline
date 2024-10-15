@@ -24,15 +24,60 @@ export default class TimelinePlugin extends Plugin {
         // Load or initialize settings
         await this.loadSettings();
 
-        // Add settings tab
-        this.addSettingTab(new TimelineSettingTab(this.app, this));
+        // Add styles directly to the document
+        const style = document.createElement('style');
+        style.textContent = `
+            .timeline-container {
+            position: relative;
+            width: 100%;
+            height: 800px; /* Increased height for better vertical spacing */
+            border-left: 2px solid #ccc;
+            margin: 20px 0;
+        }
+        .timeline-item {
+            position: absolute;
+            left: 50%; /* Center items horizontally */
+            transform: translateX(-50%);
+            /* Remove top: 0; since we'll set it dynamically */
+        }
+        .timeline-note {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 150px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .timeline-note:hover {
+            transform: scale(1.05);
+        }
+        .timeline-note h4 {
+            margin: 0 0 5px 0;
+            font-size: 16px;
+        }
+        .timeline-note p {
+            margin: 0 0 5px 0;
+            font-size: 12px;
+            color: #555;
+        }
+        .timeline-note span {
+            font-size: 10px;
+            color: #999;
+        }
+        `;
+        document.head.appendChild(style);
 
-        // Add a command to render the timeline
-        this.addCommand({
-            id: 'render-timeline',
-            name: 'Render Timeline',
-            callback: () => this.renderTimeline(),
-        });
+		// Add settings tab
+		this.addSettingTab(new TimelineSettingTab(this.app, this));
+
+		// Add a command to render the timeline
+		this.addCommand({
+			id: 'render-timeline',
+			name: 'Render Document Timeline',
+			callback: () => this.renderTimeline(),
+		});
     }
 
     onunload() {
