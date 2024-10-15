@@ -1,134 +1,243 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, Notice, MarkdownView } from 'obsidian';
+import * as yaml from 'js-yaml';
 
-// Remember to rename these classes and interfaces!
 
-interface MyPluginSettings {
-	mySetting: string;
+// Define the settings interface
+interface TimelinePluginSettings {
+    tag: string;
+    dateProperty: string; // e.g., "creation_date"
+    searchIn: 'frontmatter' | 'inline' | 'both';
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: TimelinePluginSettings = {
+    tag: "#timeline",
+    dateProperty: "date",
+    searchIn: 'frontmatter',
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class TimelinePlugin extends Plugin {
+    settings: TimelinePluginSettings;
 
-	async onload() {
-		await this.loadSettings();
+    async onload() {
+        console.log('Loading Document Timeline Plugin');
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+        // Load or initialize settings
+        await this.loadSettings();
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+        // Add settings tab
+        this.addSettingTab(new TimelineSettingTab(this.app, this));
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+        // Add a command to render the timeline
+        this.addCommand({
+            id: 'render-timeline',
+            name: 'Render Timeline',
+            callback: () => this.renderTimeline(),
+        });
+    }
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
+    onunload() {
+        console.log('Unloading Timeline Plugin');
+    }
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+    async loadSettings() {
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    }
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
+    async renderTimeline() {
+        // Get all markdown files
+        const allFiles = this.app.vault.getMarkdownFiles();
 
-	onunload() {
+        // Normalize the tag (remove '#' if present)
+        const normalizedTag = this.settings.tag.startsWith('#') ? this.settings.tag.slice(1) : this.settings.tag;
 
-	}
+        // Filter files based on the specified tag
+        const files = [];
+        for (const file of allFiles) {
+            const content = await this.app.vault.read(file);
+            const frontmatter = this.extractFrontmatter(content);
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+            let hasTag = false;
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+            // Check frontmatter tags
+            if (this.settings.searchIn === 'frontmatter' || this.settings.searchIn === 'both') {
+                if (frontmatter.tags) {
+                    if (Array.isArray(frontmatter.tags)) {
+                        hasTag = frontmatter.tags.includes(normalizedTag);
+                    } else if (typeof frontmatter.tags === 'string') {
+                        hasTag = frontmatter.tags.split(',').map(tag => tag.trim()).includes(normalizedTag);
+                    }
+                }
+            }
+
+            // If not found in frontmatter, check inline tags
+            if (!hasTag && (this.settings.searchIn === 'inline' || this.settings.searchIn === 'both')) {
+                hasTag = content.includes(this.settings.tag);
+            }
+
+            if (hasTag) {
+                files.push(file);
+            }
+        }
+
+        // Proceed with processing the filtered files
+        const fileData = await Promise.all(files.map(async file => {
+            const content = await this.app.vault.read(file);
+            // Extract date from frontmatter or use file creation date
+            const frontmatter = this.extractFrontmatter(content);
+            let date: Date;
+            if (frontmatter[this.settings.dateProperty]) {
+                date = new Date(frontmatter[this.settings.dateProperty]);
+            } else {
+                // Fallback to file's creation date
+                const stats = await this.app.vault.adapter.stat(file.path);
+                if (stats?.ctime) {
+                    date = new Date(stats.ctime);
+                } else {
+                    date = new Date(); // Default to current date if none found
+                }
+            }
+            // Extract a snippet from the content
+            const snippet = this.extractSnippet(content);
+            return {
+                file,
+                date,
+                snippet
+            };
+        }));
+
+        // Sort files by date
+        fileData.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        // Create HTML content for the timeline
+        let html = `<div class="timeline-container">`;
+        fileData.forEach(data => {
+            html += `
+                <div class="timeline-item" style="top: ${this.calculatePosition(data.date)}%;">
+                    <div class="timeline-note" onclick="app.workspace.openLinkText('${data.file.path}', '', true)">
+                        <h4>${data.file.basename}</h4>
+                        <p>${data.snippet}</p>
+                        <span>${data.date.toDateString()}</span>
+                    </div>
+                </div>
+            `;
+        });
+        html += `</div>`;
+
+        // Get the most recent leaf or create a new one
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (view) {
+            await view.setViewData(html, true);
+            //this.app.workspace.revealLeaf(leaf); // Ensure the leaf is visible
+            console.log("Timeline rendered in the current view");
+        } else {
+            new Notice("Unable to open a pane for the timeline.");
+        }
+    }
+
+    extractFrontmatter(content: string): Record<string, any> {
+        const fmRegex = /^---\n([\s\S]*?)\n---/;
+        const match = content.match(fmRegex);
+        if (match && match[1]) {
+            return this.parseYAML(match[1]);
+        }
+        return {};
+    }
+
+    parseYAML(yaml: string): Record<string, any> {
+        const lines = yaml.split('\n');
+        const data: Record<string, any> = {};
+        lines.forEach(line => {
+            const [key, ...rest] = line.split(':');
+            if (key && rest) {
+                // Handle array notation and single values
+                const value = rest.join(':').trim();
+                if (value.startsWith('[') && value.endsWith(']')) {
+                    data[key.trim()] = value.slice(1, -1).split(',').map(tag => tag.trim());
+                } else {
+                    data[key.trim()] = value;
+                }
+            }
+        });
+        return data;
+    }
+
+    extractSnippet(content: string, maxLength: number = 100): string {
+        // Remove frontmatter
+        const fmRegex = /^---\n([\s\S]*?)\n---\n/;
+        content = content.replace(fmRegex, '');
+        // Extract the first few lines or up to maxLength
+        const snippet = content.split('\n').find(line => line.trim().length > 0) || '';
+        return snippet.substring(0, maxLength) + (snippet.length > maxLength ? '...' : '');
+    }
+
+    calculatePosition(date: Date): number {
+        // Define the time range for the timeline (e.g., one year)
+        const now = new Date();
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(now.getFullYear() - 1);
+
+        // Clamp the date within the range
+        if (date < oneYearAgo) date = oneYearAgo;
+        if (date > now) date = now;
+
+        const total = now.getTime() - oneYearAgo.getTime();
+        const current = date.getTime() - oneYearAgo.getTime();
+        const position = (current / total) * 100;
+        return Math.min(Math.max(position, 0), 100); // Clamp between 0 and 100
+    }
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+class TimelineSettingTab extends PluginSettingTab {
+    plugin: TimelinePlugin;
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+    constructor(app: App, plugin: TimelinePlugin) {
+        super(app, plugin);
+        this.plugin = plugin;
+    }
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
+    display(): void {
+        const { containerEl } = this;
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+        containerEl.empty();
+        containerEl.createEl('h2', { text: 'Timeline Settings' });
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+        new Setting(containerEl)
+            .setName('Tag to Filter')
+            .setDesc('Specify the tag to filter documents for the timeline. Use #tag or tag.')
+            .addText(text => text
+                .setPlaceholder('#timeline')
+                .setValue(this.plugin.settings.tag)
+                .onChange(async (value) => {
+                    this.plugin.settings.tag = value;
+                    await this.plugin.saveSettings();
+                }));
 
-	display(): void {
-		const {containerEl} = this;
+        new Setting(containerEl)
+            .setName('Date Property')
+            .setDesc('Specify the frontmatter property that contains the creation date. Leave empty to use file creation date.')
+            .addText(text => text
+                .setPlaceholder('creation_date')
+                .setValue(this.plugin.settings.dateProperty)
+                .onChange(async (value) => {
+                    this.plugin.settings.dateProperty = value;
+                    await this.plugin.saveSettings();
+                }));
 
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+        new Setting(containerEl)
+            .setName('Search In')
+            .setDesc('Specify where to search for the tag: Frontmatter, Inline, or Both.')
+            .addDropdown(dropdown => dropdown
+                .addOption('frontmatter', 'Frontmatter')
+                .addOption('inline', 'Inline Content')
+                .addOption('both', 'Both')
+                .setValue(this.plugin.settings.searchIn)
+                .onChange(async (value) => {
+                    this.plugin.settings.searchIn = value as 'frontmatter' | 'inline' | 'both';
+                    await this.plugin.saveSettings();
+                }));
+    }
 }
