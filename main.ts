@@ -28,44 +28,105 @@ export default class TimelinePlugin extends Plugin {
         const style = document.createElement('style');
         style.textContent = `
             .timeline-container {
-            position: relative;
-            width: 100%;
-            height: 800px; /* Increased height for better vertical spacing */
-            border-left: 2px solid #ccc;
-            margin: 20px 0;
-        }
-        .timeline-item {
-            position: absolute;
-            left: 50%; /* Center items horizontally */
-            transform: translateX(-50%);
-            /* Remove top: 0; since we'll set it dynamically */
-        }
-        .timeline-note {
-            background-color: #fff;
-            border: 1px solid #ddd;
-            padding: 10px;
-            border-radius: 5px;
-            cursor: pointer;
-            width: 150px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
-        }
-        .timeline-note:hover {
-            transform: scale(1.05);
-        }
-        .timeline-note h4 {
-            margin: 0 0 5px 0;
-            font-size: 16px;
-        }
-        .timeline-note p {
-            margin: 0 0 5px 0;
-            font-size: 12px;
-            color: #555;
-        }
-        .timeline-note span {
-            font-size: 10px;
-            color: #999;
-        }
+                position: relative;
+                width: 80%;
+                margin: 20px auto;
+                padding: 40px 0;
+            }
+
+            /* Central vertical line */
+            .timeline-container::before {
+                content: '';
+                position: absolute;
+                left: 50%;
+                top: 0;
+                bottom: 0;
+                width: 4px;
+                background: #ccc;
+                transform: translateX(-50%);
+            }
+
+            /* Timeline items */
+            .timeline-item {
+                position: absolute;
+                width: 45%;
+                padding: 10px 20px;
+                box-sizing: border-box;
+            }
+
+            /* Alternating sides */
+            .timeline-item.left {
+                left: 0;
+                text-align: right;
+            }
+
+            .timeline-item.right {
+                left: 55%;
+                text-align: left;
+            }
+
+            /* Connector lines */
+            .timeline-item::before {
+                content: '';
+                position: absolute;
+                top: 20px; /* Adjust based on item height */
+                width: 0;
+                height: 0;
+                border: 10px solid transparent;
+            }
+
+            .timeline-item.left::before {
+                right: -20px;
+                border-left-color: #fff;
+            }
+
+            .timeline-item.right::before {
+                left: -20px;
+                border-right-color: #fff;
+            }
+
+            /* Timeline notes */
+            .timeline-note {
+                background-color: #fff;
+                border: 1px solid #ddd;
+                padding: 15px;
+                border-radius: 5px;
+                cursor: pointer;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                transition: transform 0.2s;
+            }
+
+            .timeline-note:hover {
+                transform: scale(1.05);
+            }
+
+            .timeline-note h4 {
+                margin: 0 0 5px 0;
+                font-size: 16px;
+            }
+
+            .timeline-note p {
+                margin: 0 0 5px 0;
+                font-size: 12px;
+                color: #555;
+            }
+
+            .timeline-note span {
+                font-size: 10px;
+                color: #999;
+            }
+
+            /* Year labels */
+            .year-label {
+                position: absolute;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #f0f0f0;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                color: #333;
+            }
         `;
         document.head.appendChild(style);
         console.log('Styles added to the document');
@@ -181,15 +242,51 @@ export default class TimelinePlugin extends Plugin {
             };
         }));
 
-        // Sort files by date
-        fileData.sort((a, b) => a.date.getTime() - b.date.getTime());
-        console.log("Files sorted by date");
+        // Sort files by date (latest first)
+        fileData.sort((a, b) => b.date.getTime() - a.date.getTime());
+        console.log("Files sorted by date (latest first)");
+
+        // Determine the date range
+        const dates = fileData.map(data => data.date);
+        const latestDate = new Date(Math.max(...dates.map(d => d.getTime())));
+        const oldestDate = new Date(Math.min(...dates.map(d => d.getTime())));
+        console.log(`Date range: ${oldestDate.toDateString()} to ${latestDate.toDateString()}`);
+
+        // Calculate total years and map to timeline container height
+        const totalYears = latestDate.getFullYear() - oldestDate.getFullYear() + 1;
+        const yearHeight = 100 / totalYears; // Percentage per year
 
         // Create HTML content for the timeline
         let html = `<div class="timeline-container">`;
-        fileData.forEach(data => {
+        // Add year labels
+        for (let year = oldestDate.getFullYear(); year <= latestDate.getFullYear(); year++) {
+            const yearDate = new Date(year, 0, 1);
+            const position = this.calculatePosition(yearDate, oldestDate, latestDate);
             html += `
-                <div class="timeline-item" style="top: ${this.calculatePosition(data.date)}%;">
+                <div class="year-label" style="top: ${position}%; transform: translateX(-50%) translateY(-50%);">
+                    ${year}
+                </div>
+            `;
+        }
+
+        // Alternate sides
+        let isLeft = true;
+        // Keep track of occupied positions to prevent overlapping
+        const occupiedPositions: number[] = [];
+
+        fileData.forEach(data => {
+            const sideClass = isLeft ? 'left' : 'right';
+            isLeft = !isLeft; // Toggle side for next item
+
+            let position = this.calculatePosition(data.date, oldestDate, latestDate);
+
+            // Adjust position to prevent overlapping
+            position = this.adjustPosition(position, occupiedPositions);
+
+            occupiedPositions.push(position);
+
+            html += `
+                <div class="timeline-item ${sideClass}" style="top: ${position}%;">
                     <div class="timeline-note" onclick="app.workspace.openLinkText('${data.file.path}', '', true)">
                         <h4>${data.file.basename}</h4>
                         <p>${data.snippet}</p>
@@ -242,20 +339,29 @@ export default class TimelinePlugin extends Plugin {
         return snippet.length > maxLength ? snippet.substring(0, maxLength) + '...' : snippet;
     }
 
-    calculatePosition(date: Date): number {
-        // Define the time range for the timeline (e.g., one year)
-        const now = new Date();
-        const oneYearAgo = new Date();
-        oneYearAgo.setFullYear(now.getFullYear() - 1);
-
-        // Clamp the date within the range
-        if (date < oneYearAgo) date = oneYearAgo;
-        if (date > now) date = now;
-
-        const total = now.getTime() - oneYearAgo.getTime();
-        const current = date.getTime() - oneYearAgo.getTime();
+    /**
+     * Calculate the vertical position as a percentage based on the date range.
+     * Latest date at the top (0%) and oldest at the bottom (100%).
+     */
+    calculatePosition(date: Date, oldest: Date, latest: Date): number {
+        const total = latest.getTime() - oldest.getTime();
+        const current = latest.getTime() - date.getTime(); // Invert to have latest on top
         const position = (current / total) * 100;
         return Math.min(Math.max(position, 0), 100); // Clamp between 0 and 100
+    }
+
+    /**
+     * Adjust the position to prevent overlapping.
+     * Simple implementation: if a position is already occupied within a certain threshold, move it down.
+     */
+    adjustPosition(position: number, occupied: number[]): number {
+        const threshold = 2; // Percentage to offset to prevent overlap
+        let newPos = position;
+        while (occupied.some(pos => Math.abs(pos - newPos) < threshold)) {
+            newPos += threshold;
+            if (newPos > 100) break; // Prevent going out of bounds
+        }
+        return newPos;
     }
 }
 
